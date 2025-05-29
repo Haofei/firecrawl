@@ -6,6 +6,7 @@ import {
   SearchResponse,
   searchRequestSchema,
   ScrapeOptions,
+  TeamFlags,
 } from "./types";
 import { billTeam } from "../../services/billing/credit_billing";
 import { v4 as uuidv4 } from "uuid";
@@ -34,6 +35,7 @@ export async function searchAndScrapeSearchResult(
   },
   logger: Logger,
   costTracking: CostTracking,
+  flags: TeamFlags,
 ): Promise<Document[]> {
   try {
     const searchResults = await search({
@@ -51,7 +53,8 @@ export async function searchAndScrapeSearchResult(
         },
         options,
         logger,
-        costTracking
+        costTracking,
+        flags
       )
     )
   );
@@ -72,6 +75,7 @@ async function scrapeSearchResult(
   },
   logger: Logger,
   costTracking: CostTracking,
+  flags: TeamFlags,
 ): Promise<Document> {
   const jobId = uuidv4();
   const jobPriority = await getJobPriority({
@@ -80,7 +84,7 @@ async function scrapeSearchResult(
   });
 
   try {
-    if (isUrlBlocked(searchResult.url)) {
+    if (isUrlBlocked(searchResult.url, flags)) {
       throw new Error("Could not scrape url: " + BLOCKLISTED_URL_MESSAGE);
     }
     logger.info("Adding scrape job", {
@@ -141,6 +145,7 @@ async function scrapeSearchResult(
       metadata: {
         statusCode,
         error: error.message,
+        proxyUsed: "basic",
       },
     };
   }
@@ -191,6 +196,10 @@ export async function searchController(
       location: req.body.location,
     });
 
+    if (req.body.ignoreInvalidURLs) {
+      searchResults = searchResults.filter((result) => !isUrlBlocked(result.url, req.acuc?.flags ?? null));
+    }
+
     logger.info("Searching completed", {
       num_results: searchResults.length,
     });
@@ -220,7 +229,7 @@ export async function searchController(
           origin: req.body.origin,
           timeout: req.body.timeout,
           scrapeOptions: req.body.scrapeOptions,
-        }, logger, costTracking),
+        }, logger, costTracking, req.acuc?.flags ?? null),
       );
 
       const docs = await Promise.all(scrapePromises);
@@ -246,7 +255,13 @@ export async function searchController(
     }
 
     // Bill team once for all successful results
-    billTeam(req.auth.team_id, req.acuc?.sub_id, responseData.data.length).catch((error) => {
+    billTeam(req.auth.team_id, req.acuc?.sub_id, responseData.data.reduce((a,x) => {
+      if (x.metadata?.numPages !== undefined && x.metadata.numPages > 0) {
+        return a + x.metadata.numPages;
+      } else {
+        return a + 1;
+      }
+    }, 0)).catch((error) => {
       logger.error(
         `Failed to bill team ${req.auth.team_id} for ${responseData.data.length} credits: ${error}`,
       );
@@ -269,6 +284,7 @@ export async function searchController(
       team_id: req.auth.team_id,
       mode: "search",
       url: req.body.query,
+      scrapeOptions: req.body.scrapeOptions,
       origin: req.body.origin,
       cost_tracking: costTracking,
     });
