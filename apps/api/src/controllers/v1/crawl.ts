@@ -89,7 +89,7 @@ export async function crawlController(
     createdAt: Date.now(),
   };
 
-  const crawler = crawlToCrawler(id, sc);
+  const crawler = crawlToCrawler(id, sc, req.acuc?.flags ?? null);
 
   try {
     sc.robots = await crawler.getRobotsTxt(scrapeOptions.skipTlsVerification);
@@ -114,6 +114,7 @@ export async function crawlController(
       scrapeOptions: sc.scrapeOptions,
       internalOptions: sc.internalOptions,
       origin: req.body.origin,
+      integration: req.body.integration,
       crawl_id: id,
       webhook: req.body.webhook,
       v1: true,
